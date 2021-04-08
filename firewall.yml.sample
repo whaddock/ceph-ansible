@@ -1,0 +1,201 @@
+---
+- hosts: 
+  - mons
+  - osds
+  - rgws
+  - mgrs
+  - rgwloadbalancers
+
+  gather_facts: false
+  become: True
+  any_errors_fatal: true
+  tasks:
+    - name: install iptables
+      apt:
+        name: "iptables"
+        state: present
+
+    - name: install iptables-persistent
+      apt:
+        name: "iptables-persistent"
+        state: present
+
+# Set the policy back to ACCEPT before flushing, else we lose the network
+    - name: Set the policy to ACCEPT for the INPUT chain
+      ansible.builtin.iptables:
+        chain: INPUT
+        policy: ACCEPT
+
+    - name: Flush all rules in the INPUT chain
+      ansible.builtin.iptables:
+        chain: INPUT
+        flush: yes
+
+    - name: Allow established connections
+      ansible.builtin.iptables:
+        chain: INPUT
+        ctstate: ESTABLISHED,RELATED 
+        jump: ACCEPT
+        action: append
+
+    - name: Insert ssh rule in INPUT
+      ansible.builtin.iptables:
+        comment: "Ansible: SSH on ceph network"
+        chain: INPUT
+        ctstate: NEW
+        protocol: tcp
+        source: "{{ ceph_manager }}"
+        destination_port: "22"
+        jump: ACCEPT
+        action: append
+
+# This is to allow access from the hypervisor
+# when running Vagrant. 
+    - name: Insert ssh rule in INPUT (data)
+      ansible.builtin.iptables:
+        comment: "Ansible: SSH on data network"
+        chain: INPUT
+        ctstate: NEW
+        protocol: tcp
+        source: "{{ data_network }}"
+        destination_port: "22"
+        jump: ACCEPT
+        action: append
+
+# All Ceph servers
+    - name: Insert mon rule in INPUT
+      ansible.builtin.iptables:
+        comment: "Ansible: mon v2 on ceph network"
+        chain: INPUT
+        ctstate: NEW
+        protocol: tcp
+        source: "{{ public_network }}"
+        destination_port: "3300"
+        jump: ACCEPT
+        action: append
+
+    - name: Insert mon rule in INPUT
+      ansible.builtin.iptables:
+        comment: "Ansible: mon v1 on ceph network"
+        chain: INPUT
+        ctstate: NEW
+        protocol: tcp
+        source: "{{ public_network }}"
+        destination_port: "6789"
+        jump: ACCEPT
+        action: append
+
+    - name: Insert ceph daemon rule in INPUT
+      ansible.builtin.iptables:
+        comment: "Ansible: ms_bind on ceph network"
+        chain: INPUT
+        ctstate: NEW
+        protocol: tcp
+        source: "{{ public_network }}"
+        destination_port: "6800:7300"
+        jump: ACCEPT
+        action: append
+
+    - name: Insert prometheus rule in INPUT
+      ansible.builtin.iptables:
+        comment: "Ansible: prometheus on ceph network"
+        chain: INPUT
+        ctstate: NEW
+        protocol: tcp
+        source: "{{ public_network }}"
+        destination_port: "9090"
+        jump: ACCEPT
+        action: append
+
+    - name: Enable all outgoing traffic on ceph network
+      ansible.builtin.iptables:
+        comment: "Ansible: outgoing ceph"
+        chain: OUTPUT
+        destination: "{{ data_network }}"
+        jump: ACCEPT
+        action: append
+
+
+- hosts: 
+  - rgwloadbalancers
+  gather_facts: false
+  become: True
+  any_errors_fatal: true
+  tasks:
+# This is to allow the haproxy access S3
+    - name: Insert haproxy S3 rule in INPUT (data)
+      ansible.builtin.iptables:
+        comment: "Ansible: haproxy S3"
+        chain: INPUT
+        ctstate: NEW
+        protocol: tcp
+        source: "{{ public_network }}"
+#       destination: "{{ radosgw_address }}"
+        destination_port: "{{ radosgw_frontend_port | default(8080) }}"
+        jump: ACCEPT
+        action: append
+
+# This is to allow access the data network to S3
+    - name: Insert S3 rule in INPUT (data)
+      ansible.builtin.iptables:
+        comment: "Ansible: S3 on data network"
+        chain: INPUT
+        ctstate: NEW
+        protocol: tcp
+        source: "{{ data_network}}"
+        in_interface: ens5
+#       destination: "{{ radosgw_address }}"
+        destination_port: "443"
+        jump: ACCEPT
+        action: append
+
+# Finally, add the drop rules and policies
+- hosts: 
+  - mons
+  - osds
+  - rgws
+  - mgrs
+  - rgwloadbalancers
+
+  gather_facts: false
+  become: True
+  any_errors_fatal: true
+  tasks:
+    - name: Drop invalid cstate packets on INPUT chain
+      ansible.builtin.iptables:
+        chain: INPUT
+        ctstate: INVALID
+        jump: DROP
+        action: append
+
+    - name: Drop invalid cstate packets on OUTPUT chain
+      ansible.builtin.iptables:
+        chain: OUTPUT
+        ctstate: INVALID
+        jump: DROP
+        action: append
+
+    - name: Drop invalid cstate packets on FORWARD chain
+      ansible.builtin.iptables:
+        chain: FORWARD
+        ctstate: INVALID
+        jump: DROP
+        action: append
+
+    - name: Set the policy to DROP for the FORWARD chain
+      ansible.builtin.iptables:
+        chain: FORWARD
+        policy: DROP
+
+    - name: Set the policy to DROP for the INPUT chain
+      ansible.builtin.iptables:
+        chain: INPUT
+        policy: DROP
+
+    # This will apply to all loaded/active IPv4 tables.
+    - name: Save current state of the firewall in system file
+      community.general.iptables_state:
+        state: saved
+        path: /etc/iptables/rules.v4
+    
+    
