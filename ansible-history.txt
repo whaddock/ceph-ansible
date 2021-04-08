@@ -1,0 +1,182 @@
+   1  cat /etc/hosts
+    2  sudo dnf install git
+    3  sudo yum install git
+    4  sudo apt-get install -y git
+    5  git clone https://github.com/ceph/ceph-ansible.git
+    6  cd ceph-ansible/
+    7  ls
+    8  git branch
+    9  git checkout stable-4.0
+   10  git branch
+   11  sudo apt-get install -y ansible
+   12  ls
+   13  less Vagrantfile 
+   14  vi hosts.yml
+   15  ip -4 addr
+   16  vi hosts.yml
+   17  cat /etc/hosts
+   18  exit
+   19  export USER_NAME="ceph-admin"
+   20  export USER_PASS="aR3@llyStrOngP@ssw0rd"
+   21  sudo useradd --create-home -s /bin/bash ${USER_NAME}
+   22  echo "${USER_NAME}:${USER_PASS}"|sudo chpasswd
+   23  echo "${USER_NAME} ALL = (root) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/${USER_NAME}
+   24  sudo chmod 0440 /etc/sudoers.d/${USER_NAME}
+   25  sudo ls -l /etc/sudoers.d/
+   26  sudo su - ceph-admin
+   27  ssh mon1.local
+   28  ssh root@mon1.local
+   29  exit
+   30  sudo su - ceph-admin
+   31  ssh-keygen
+   32  cat .ssh/id_rsa.pub 
+   33  exit
+   34  ls -l .ssh
+   35  sudo su - ceph-admin
+   36  exit
+   37  cd ceph-ansible/
+   38  ansible -i hosts.yml -e hostname
+   39  ansible all -i hosts.yml -a "/bin/hostname"
+   40  ls ..
+   41  ls ../ansible/
+   42  df -h
+   43  ssh rgw1.local
+   44  vi hosts.yml 
+   45  ssh rgw1.local
+   46  ssh rgw1.local -vvv
+   47  ls ~/.ssh
+   48  pwd
+   49  ls -l ~/.ssh
+   50  cd
+   51  cat .ssh/id_rsa.pub 
+   52  cat >> /home/vagrant/.ssh/config <<EOL
+   53  Host mon1
+   54    Hostname mon1
+   55    User vagrant
+   56  Host rgw1
+   57    Hostname rgw1
+   58    User vagrant
+   59  Host rgw2
+   60    Hostname rgw2
+   61    User vagrant
+   62  Host osd1
+   63    Hostname osd1
+   64    User vagrant
+   65  Host osd2
+   66    Hostname osd2
+   67    User vagrant
+   68  Host osd3
+   69    Hostname osd3
+   70    User vagrant
+   71  EOL
+   72  vi .ssh/config 
+   73  ssh rgw1.local -vvv
+   74  ssh rgw1.local -vvvv
+   75  exit
+   76  sudo su - ceph-admin
+   77  ssh rgw1.local 
+   78  ls -ltr .ssh
+   79  date
+   80  cat .ssh/config 
+   81  sudo su - ceph-admin
+   82  ls
+   83  cd ..
+   84  ls
+   85  sudo rsync -avz vagrant/ansible ceph-admin/
+   86  sudo rsync -avz vagrant/ceph-ansible ceph-admin/
+   87  sudo ls -l ceph-admin/
+   88  sudo chown -R ceph-admin. ceph-admin/ansible
+   89  sudo chown -R ceph-admin. ceph-admin/ceph-ansible
+   90  sudo ls -l ceph-admin/
+   91  cd
+   92  sudo su - ceph-admin
+
+As ceph-admin user:
+    1  ssh-keygen 
+    2  cat >> /home/ceph-admin/.ssh/config <<EOL
+    3  Host ceph-mon
+    4    Hostname ceph-mon
+    5    User ceph-admin
+    6  Host ceph-rgw
+    7    Hostname ceph-rgw
+    8    User ceph-admin
+    9  Host ceph120-1
+   10    Hostname ceph120-1
+   11    User ceph-admin
+   12  Host ceph120-2
+   13    Hostname ceph120-2
+   14    User ceph-admin
+   15  Host ceph120-3
+   16    Hostname ceph120-3
+   17    User ceph-admin
+   18  EOL
+   19  ls -l .ssh/
+   20  vi .ssh/config 
+   21  vi /etc/hosts
+   22  sudo cp hosts /etc/hosts
+   23  cat /etc/hosts
+   24  ip -4 addr
+   25  exit
+   26  cat .ssh/id_rsa.pub 
+   27  exit
+   28  ls -l .ssh
+   29  exit
+   30  ssh rgw1.local
+   31  exit
+   32  cat .ssh/config 
+   33  cat /etc/hosts
+   34  vi .ssh
+   35  vi .ssh/config 
+   36  ssh rgw1.local
+   37  ssh rgw2.local
+   38  ssh osd1.local
+   39  ssh osd2.local
+   40  ssh osd3.local
+   41  ssh mon1.local
+   42  exit
+   43  cd ceph-ansible/
+   44  ls
+   45  ansible -i hosts.yml -a '/bin/hostname'
+   46  ansible rgw1.local -i hosts.yml -a '/bin/hostname'
+   47  ansible all -i hosts.yml -a '/bin/hostname'
+   48  vi hosts.yml 
+   49  ssh ansible.local
+   50  ansible all -i hosts.yml -a '/bin/hostname'
+   51  cat /etc/hosts
+   52  ssh localhost
+   53  vi hosts.yml 
+   54  ansible all -i hosts.yml -a '/bin/hostname'
+   55  vi hosts.yml 
+   56  cat hosts.yml 
+   57  vi localhost.yml
+   58  cd
+   59  vi .ssh/config 
+   60  ansible all -i localhost.yml -a '/bin/hostname'
+   61  vi localhost.yml
+   62  cd -
+   63  ansible all -i localhost.yml -a '/bin/hostname'
+   64  ssh ansible.local
+   65  cd ~/.ssh
+   66  ls -l
+   67  cd ..
+   68  cat >>.ssh/authorized_keys <<EOL
+   69  ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDEI0q3unmn2maCsZBq6TWUyCEfCvNqlCAEd6mAhSG/YcfdjFihcJAMoswX9xPXHb8lRBealKyfVwSZkjXQKIRUGBDTM4tw1GxSnwny4NbOl5AV5F9LUzcVee1aujkEwSTRtxGaIpo4ezRuanUpB4uiTHFbUzYvOn/3TJnxu4WB3Jj6iLWwym91x4L6GG6ol9vdFp2NM7QXw8aDqybxKYvg+GoUErzPgmSbzZMwMASFF/zvFICfDL4bU6KmYMEtGQZNN9gRzLOTkOqyvd4oGOuMwEhjYmJliiNPpu9Uw0oN6Mu4soavqRK1bOlMZ18UDa8cYs0LF+xf5PJAP97wCVz5 ceph-admin@ansible
+   70  EOL
+   71  chmod 600 .ssh/authorized_keys
+   72  ls -l .ssh/
+   73  ssh ansible.local
+   74  cd ceph-ansible/
+   75  ansible all -i localhost.yml -a '/bin/hostname'
+   76  hostname --fqdn
+   77  hostnamectl
+   78  hostname
+   79  less hosts.yml 
+   80  exit
+   81  ls
+   82  exit
+   83  ls
+   84  cd ceph-ansible/
+   85  ls
+   86  cd
+   87  ls -l .ssh
+   88  history

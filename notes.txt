@@ -1,0 +1,223 @@
+Building a Debian Buster Ceph Nautilus lab with Vagrant.
+
+1) Use an ansible node to run ceph-ansible. Must create
+the ceph-admin user on all the nodes. The ansible ssh
+key for the ceph-admin user must be on all of the
+nodes and the authorized hosts must include the
+host keys.
+2) the ceph-admin user must be in the wheel group.
+3) Install /etc/hosts on all machines.
+4) To use the SoftIron repository we need to respect the
+hardware architecture. So, we are using the ceph
+CDN.
+5) The Debian Buster image in the Vagrant cloud
+has /usr/bin/python linked to python 2.7. We need
+to remove the link and add a new one to python 3
+    cd /usr/bin
+    sudo rm python
+    sudo ln -s python3 python
+
+Ceph-Ansible
+1. lots of playbooks for infrastructure in the
+    ceph-ansible/infrastructure directory.
+    
+2. To see the version of ceph-ansible:
+    If make is not installed: sudo apt-get install make
+    sudo apt-get install make
+    make echo
+
+3. ceph-ansible/library contains Python implementations
+of Ansible wrappers to the ceph tools. This is where the
+interfaces for the Ansible playbooks are defined.
+
+4. Configure the site.yml file to include only the types
+of ceph nodes that we are using. Just delete the types
+from the site.yml.sample file to create it.
+
+5. What can we do about the clear password for the
+keepalived.conf file found in
+ceph-ansible/roles/ceph-rgw-loadbalancer/templates/keepalived.conf.j2?
+
+6. Vars for keepalived:
+    virtual_ip_interface: ens6
+    virtual_ip_netmask: 24
+    virtual_ips:
+      - 192.168.99.250
+      - 192.168.99.251
+    Defaults in ceph-ansible/roles/ceph-rgw-loadbalancer/defaults/main.yml
+
+7. Vars for haproxy:
+    haproxy_frontend_ssl_certificate
+    haproxy_ssl_dh_param
+    haproxy_ssl_ciphers
+    haproxy_ssl_options
+    haproxy_frontend_ssl_port
+    Defaults in ceph-ansible/roles/ceph-rgw-loadbalancer/defaults/main.yml
+
+
+8. In production, we will create TLS certificates for the RGWs using IdM.
+For development, to create a self-signed TLS certificate for the RGWs:
+    (as root)
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout \
+      /etc/ssl/private/ceph-rgw-cert.key -out /etc/ssl/certs/ceph-rgw.crt
+    cat /etc/ssl/private/ceph-rgw-cert.key  /etc/ssl/certs/ceph-rgw.crt \
+    >  /etc/ssl/certs/ceph-rgw-combined.crt
+    chmod o-r /etc/ssl/certs/ceph-rgw-combined.crt
+    # We will chown haproxy. /etc/ssl/certs/ceph-rgw-combined.crt
+    # This should be done before we install Ceph
+    # When using the self signed certificates, you have to configure
+    # boto3 not to verify certificates: verify=False
+
+9. Configuration for the ceph-rgw. Defaults are found in
+   ceph-ansible/roles/ceph-rgw/defaults.yml
+   We will set these values in hosts.yml for testing but
+   we will make the rgw.buckets.data an ec pool for production.
+   copy_admin_key: false
+
+    #  "{{ rgw_zone }}.rgw.buckets.data":
+    #    pg_num: 64
+    #    type: ec
+    #    ec_profile: prodecprofile
+    #    ec_k: 5
+    #    ec_m: 3
+   rgw_create_pools:
+   "{{ rgw_zone }}.rgw.buckets.data":
+     pg_num: 64
+     size: 3
+     type: replicated
+   "{{ rgw_zone }}.rgw.buckets.index":
+     pg_num: 16
+     size: 3
+     type: replicated
+   "{{ rgw_zone }}.rgw.meta":
+     pg_num: 8
+     size: 3
+     type: replicated
+   "{{ rgw_zone }}.rgw.log":
+     pg_num: 8
+     size: 3
+     type: replicated
+   "{{ rgw_zone }}.rgw.control":
+     pg_num: 8
+     size: 3
+     type: replicated
+   radosgw_num_instances: 2
+
+10. We need to add another interface for the ceph cluster network. The
+RGWs will be on the public network.
+
+11. OSD configuration in hosts.yml
+    osd_auto_discovery: true
+    
+12. All vars in hosts.yml
+    ceph_origin: distro
+    ceph_use_distro_backports: true
+#   ceph_repository: community
+#   ceph_mirror: http://httpredir.debian.org
+#   ceph_stable_release: nautilus
+#   ceph_stable_distro_source: buster-backports
+#   ceph_stable_repo: "{{ ceph_mirror }}/debian "
+    monitor_interface: ens6
+    ip_version: ipv4
+    ceph_tcmalloc_max_total_thread_cache: 134217728
+    mon_use_fqdn: true
+
+13. For each RGW we need to define the address. We are using the
+    load balancer.
+    radosgw_address: 192.168.99.42
+    radosgw_address: 192.168.99.43
+
+14. look at roles/ceph-defaults/defaults.yml to get a description
+for many of the default settings.
+
+15. Set the ansible_python_interpreter in the global section
+    ansible_python_interpreter: /usr/bin/python3
+      Be sure to fix the link to /usr/bin/python3, by default it points
+      to python2
+      
+16. Set the monitor vars where defaults are not acceptable. The defaults are found in
+    ceph-ansible/roles/ceph-rgw/defaults.yml. First generate an admin_secret:
+      python -c "import os ; import struct ; import time; import base64 ; key = os.urandom(16) ; \
+      header = struct.pack('<hiih',1,int(time.time()),0,len(key)) ;\
+      print(base64.b64encode(header + key).decode())"
+      AQBYJ15gAAAAABAADq5k30KhQ63IyUW9ce/s1A==
+
+      # ACTIVATE BOTH FSID AND MONITOR_SECRET VARIABLES FOR NON-VAGRANT DEPLOYMENT
+      monitor_secret: "{{ monitor_keyring.stdout }}"
+      admin_secret: 'AQBYJ15gAAAAABAADq5k30KhQ63IyUW9ce/s1A=='
+      mgr_secret: 'AQBYJ15gAAAAABAADq5k30KhQ63IyUW9ce/s1A=='
+
+      # Secure your cluster
+      # This will set the following flags on all the pools:
+      # * nosizechange
+      # * nopgchange
+      # * nodelete
+
+      secure_cluster: false
+      secure_cluster_flags:
+        - nopgchange
+        - nodelete
+        - nosizechange
+
+      client_admin_ceph_authtool_cap:
+        mon: allow *
+        osd: allow *
+        mds: allow *
+        mgr: allow *
+
+17. Set the monitor_address for each monitor:
+        mons:
+          hosts:
+            mon1.local:
+              monitor_address: 192.168.99.41
+
+18. Ceph-ansible requires ansible version > 2.9. Add the
+    buster backports to the /etc/sources.list configuration:
+      deb http://httpredir.debian.org/debian buster-backports main
+    Then, run the install command:
+      sudo apt-get install ansible/buster-backports
+    To find out the versions of ansible that are available for
+    Debian Buster:
+      sudo apt search ansible
+    Update the packages:
+      sudo apt update
+      sudo apt upgrade
+
+19. To prevent the grafana error message, we must disable the dashboard:
+    dashboard_enabled: false
+
+20. To run on virtual machines set the containerized_deployment: false
+
+21. ceph_release_num:
+      nautilus: 14
+
+22. To correct the date on the vagrant nodes that are running chronyd,
+you have to force an update. From the ansible node:
+ansible all -i hosts.yml -a '/bin/systemctl stop chrony' --become
+ansible all -i hosts.yml -a '/usr/sbin/chronyd -q' --become
+ansible all -i hosts.yml -a '/bin/systemctl start chrony' --become
+
+You can check the date on all of the hosts with:
+ansible all -i hosts.yml -a '/bin/date'
+
+23. Check the monitor status for quorum:
+    sudo ceph --admin-daemon /var/run/ceph/ceph-mon.mon1.asok mon_status
+
+
+24. Make sure to set the public_network in all: vars:
+    public_network: 192.168.99.0/24
+
+25. Create the testuser on the rados gateway for use in testing S3. Perform
+    the command on the monitor node.
+    ceph-admin@mon1:~$ sudo radosgw-admin user create \
+      --uid="testuser" --display-name="First User"
+
+26. Clone the ceph-s3 git repository (whaddock). Change to the directory.
+    Save the output from #25 in a json file.
+    Grab the two keys from the json file and save in credentials.json file.
+    Add the "endpoint_url" key to the credentials.json file and add the
+    start and end curly braces.
+    Use the uuidgen.py file to generate UUID keys for uploading files.
+    All of the examples have verify=False so a self signed certificate
+      will work. You still get a warning, though. Not needed for production.
+

@@ -1,0 +1,48 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+nodes = [ 
+  { :hostname => 'ansible', :ip => '192.168.99.40', :box => 'debian/buster64' },
+  { :hostname => 'mon1', :ip => '192.168.99.41', :box => 'debian/buster64' }, 
+  { :hostname => 'rgw1', :ip => '192.168.99.42', :box => 'debian/buster64' }, 
+  { :hostname => 'rgw2', :ip => '192.168.99.43', :box => 'debian/buster64' }, 
+  { :hostname => 'osd1',  :ip => '192.168.99.51', :box => 'debian/buster64', :ram => 1024, :osd => 'yes' },
+  { :hostname => 'osd2',  :ip => '192.168.99.52', :box => 'debian/buster64', :ram => 1024, :osd => 'yes' }, 
+  { :hostname => 'osd3',  :ip => '192.168.99.53', :box => 'debian/buster64', :ram => 1024, :osd => 'yes' } 
+] 
+
+Vagrant.configure("2") do |config|
+  nodes.each do |node| 
+    memory = node[:ram] ? node[:ram] : 512; 
+    config.vm.define node[:hostname] do |nodeconfig| 
+      nodeconfig.vm.box = node[:box]
+      nodeconfig.vm.box_version = "10.4.0"
+      nodeconfig.vm.box_check_update = false
+      nodeconfig.vm.hostname = node[:hostname] 
+      nodeconfig.vm.network :private_network, ip: node[:ip] 
+      nodeconfig.vm.synced_folder ".", "/vagrant", disabled: true
+      nodeconfig.vm.provider :libvirt do |libvirt|
+        libvirt.qemu_use_session = false
+        libvirt.memory = memory.to_s
+        if node[:osd] =~ /yes|YES/
+          libvirt.storage :file
+        end
+      end
+
+      # Vagrant's "change host name" sets the short host name.  Before
+      # we repair /etc/hosts (see below) let's reset /etc/hostname to
+      # the *full* host name
+      #
+      nodeconfig.vm.provision "shell",
+                              inline: "hostname --fqdn > /etc/hostname && hostname -F /etc/hostname"
+
+      # Vagrant's "change host name" capability for Fedora maps hostname
+      # to loopback.  We must repair /etc/hosts
+      #
+      nodeconfig.vm.provision "shell",
+                              inline: "sed -ri 's/127\.0\.0\.1\s.*/127.0.0.1 localhost localhost.localdomain/' /etc/hosts"
+
+      
+    end 
+  end 
+end

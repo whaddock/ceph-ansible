@@ -1,0 +1,5 @@
+The ansible playbook for the ceph firewall is part of ceph-ansible
+(our fork). In order to get persistence, we have to add the persistence
+module from the ansible collections community. I have put this in
+the ceph-ansible code base and updated the ansible.cfg file to find it.
+
