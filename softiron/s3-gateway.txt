@@ -1,0 +1,105 @@
+SoftIron
+
+
+
+S3 GATEWAY
+
+
+# Install Ceph Object Gateway
+
+At delivery time, your S3 Object Gateway has already been configured.
+These steps are for your convenience.
+
+There are a number of preflight tasks that should already be satisfied
+but if they are not, please refer to Ceph Preflight Checklist.
+
+From your administration node (where “monitor” is the name or IP Address
+of your SoftIron Admin node) install the Ceph Object Gateway.
+
+All commands must be run from ‘/etc/ceph’
+
+    cd /etc/ceph
+    ceph-deploy install --rgw monitor
+
+
+# Create a Gateway Instance:
+
+    ceph-deploy -v gatherkeys monitor
+    ceph-deploy rgw create monitor
+
+To validate the gateway instance is working properly, browse to:
+
+    http://monitor:7480
+
+If successful, a response similar to the following will be shown:
+
+    <?xml version="1.0" encoding="UTF-8"?>
+    <ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+        <Owner>
+            <ID>anonymous</ID>
+            <DisplayName></DisplayName>
+        </Owner>
+        <Buckets>
+        </Buckets>
+    </ListAllMyBucketsResult>
+
+# Additional Configuration Options
+
+-   Change the Default Port
+-   Using SSL with Civetweb
+-   Configure Bucket Sharding
+-   Add Wildcard to DNS
+-   Add Debugging
+
+# Using the Gateway
+
+Create a RADOSGW User for S3 Access:
+
+    radosgw-admin user create --uid="testuser" --display-name="First User"
+
+The output of the command should be similar to:
+
+    {
+      "user_id": "testuser",
+      "display_name": "First User",
+      "email": "",
+      "suspended": 0,
+      "max_buckets": 1000,
+      "auid": 0,
+      "subusers": [],
+      "keys": [
+        {
+          "user": "testuser",
+          "access_key": "RE8DNX0SJOEHY37E078Y",
+          "secret_key": "jBmcBIzm14fUQtKhmXZeKJQyitCHcM9VEOck1Exl"
+        }
+      ],
+      "swift_keys": [],
+      "caps": [],
+      "op_mask": "read, write, delete",
+      "default_placement": "",
+      "placement_tags": [],
+      "bucket_quota": {
+        "enabled": false,
+        "check_on_raw": false,
+        "max_size": -1,
+        "max_size_kb": 0,
+        "max_objects": -1
+      },
+      "user_quota": {
+        "enabled": false,
+        "check_on_raw": false,
+        "max_size": -1,
+        "max_size_kb": 0,
+        "max_objects": -1
+      },
+      "temp_url_keys": [],
+      "type": "rgw"
+    }
+
+Please refer to Test S3 Access for details on creating a test python
+script for verifying access.
+
+SoftIron Customer Portal
+
+Copyright © SoftIron Limited, 2021. All rights reserved.

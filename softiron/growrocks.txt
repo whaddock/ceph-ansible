@@ -1,0 +1,518 @@
+SoftIron
+
+
+
+EXPANDING THE ROCKS.DB ON SOFTIRON LINUX
+
+
+# Current Issue
+
+If you have a SoftIron HyperDrive Density (HD11120) cluster implemented
+prior to December 2020, you may encounter an issue when transferring
+large amounts of data to your cluster that looks like:
+
+    BLUEFS_SPILLOVER BlueFS spillover detected on 2 OSD(s)
+         osd.15 spilled over 45 GiB metadata from 'db' device (646 MiB used of 1024 MiB) to slow device
+         osd.61 spilled over 41 GiB metadata from 'db' device (3.3 GiB used of 10 GiB) to slow device
+
+Ceph typically suggests to run compaction routines on your OSDs similar
+to:
+
+    !/bin/bash
+    export CEPH_DEV=1
+    /usr/bin/ceph osd ls | xargs -rn1 -I '{}' /usr/bin/ceph tell osd.'{}' compact
+    /usr/bin/ceph mon compact
+
+This however, does not always fix the issue. The below script has been
+created to aid in the expansion of the partition(s) associated to the
+Rocks.db. Currently, these partitions are allocated 20GB of space for
+the rocks.db and 20MB of space for the write-ahead-log (WAL). When we
+deployed previous clusters, we agreed on this level of partition
+allocation in an effort to maintain the drive life of the SSD(s),
+coupled with an appropriate value based on the defined usage and
+behavior from Ceph Luminous. Since moving to Ceph Nautilus, the activity
+seen when using Ceph as a backup target, or moving large amounts of data
+in/out of the cluster, is typically BlueFS spillover errors. In our
+testing, expanding the partition to 64GB for the rocks.db (based on the
+current size of the acceleration SSD), has adequately resolved the error
+and prevents the BlueFS spillover notice, maintaining appropriate
+cluster performance.
+
+
+# How to use the script
+
+There are a couple of different ways to implement this change; in bulk
+or one OSD at a time.
+
+_NOTE: IF THIS IS BEING RUN ON A LIVE PRODUCTION CLUSTER, IT IS
+RECOMMENDED TO DO ONE OSD AT A TIME IN ORDER TO ALLOW CEPH TO COMPLETE
+ALL MANAGEMENT TASKS BETWEEN CHANGES._
+
+Save this script to a file named growrocks.sh on the OSD server and
+change permissions on it to allow execution:
+
+    chmod +x ./growrocks.sh
+
+# Single OSD Deployment
+
+Execute the script on each OSD disk associated to the chassis it is
+running on. All OSD disks on all systems are labeled the same
+/dev/sdb - /dev/sdo with /dev/sdd and /dev/sdh being the two journal
+drives where the rocks.db and rocks.wal are assigned.
+
+It's always a good idea to add-noout the OSD so Ceph doesn't kick it out
+of the cluster while we're performing maintenance. You'll want to find
+which OSD is associated to the specific drive using
+ceph-volume lvm list, or to pin it down further:
+
+    ceph-volume lvm list | grep -E 'osd id|devices' | awk '{print $2 $3}'
+
+Expand for example output:
+
+    id0
+    /dev/sdb
+    id1
+    /dev/sdf
+    id10
+    /dev/sdn
+    id11
+    /dev/sdo
+    id2
+    /dev/sdg
+    id3
+    /dev/sdi
+    id4
+    /dev/sdc
+    id5
+    /dev/sde
+    id6
+    /dev/sdj
+    id7
+    /dev/sdk
+    id8
+    /dev/sdl
+    id9
+    /dev/sdm
+
+Before running the script for each OSD (using the example output above
+to target sdb), run:
+
+    ceph osd add-noout 0
+
+For each OSD disk, not including the two journal drives (sdd/sdh),
+simply follow this implementation method:
+
+    ./growrocks.sh sdb
+
+This script has a single prompt to allow the decision to delete the old
+db partition. This prompt can be answered automatically by adding a -y
+to the end of the command. _NOTE: if you choose to "not" delete the
+partition, you will be required to manually make all of the subsequent
+changes for the OSD to work again._
+
+    ./growrocks.sh sdb -y
+
+Total estimated time for completion of a single OSD is between 1.5 to 2
+minutes.
+
+When complete, unset the OSD flag:
+
+    ceph osd rm-noout 0
+
+# Bulk Deployment
+
+This is simply a convenience method for completing the expansion on all
+OSDs at once. Each OSD is stopped individually (not in bulk), but it is
+not suggested to use this method if the cluster is actively in use.
+
+OSDs associated to the first journal drive (/dev/sdd):
+
+    for i in {b,c,e,f,g,i} ; do ./growrocks.sh sd${i} -y ; done
+
+OSDs associated to the second journal drive (/dev/sdh)
+
+    for i in {j..o} ; do ./growrocks.sh sd${i} -y ; done
+
+Expand for full script:
+
+    #!/bin/bash
+
+    # Be strict, we want this to fail fast
+    set -e
+
+    ### Set some Vars
+
+    #make the rockdb size 64GB
+    rocksdbsize=64
+    rocksdbbytesize=$(expr ${rocksdbsize} \* 1024 \* 1024 \* 1024)
+
+    # generate a uuid so we don't have to delete the old partition
+    fakeuuid=$(cat /proc/sys/kernel/random/uuid)
+
+    ### Sanity checks
+
+    #doesn't make much sense without a drive to work on
+    if [ -z "$1" ]
+    then
+       echo "You must add a disk - run the command like"
+       echo "./growrocks.sh sdb"
+       echo
+       echo "Find details about the devices associated with an OSD with"
+       echo "ceph-volume lvm-list [some /dev/sd[x] device]"
+       exit
+    fi
+
+    if [ "$1" == "-h" ]
+    then
+        echo "There are only 2 options with this script:"
+        echo "One that prompts you to delete the old partition"
+        echo "./growrocks.sh sdb"
+        echo
+        echo "One that does not prompt you and just deletes the old partition"
+        echo "./growrocks.sh sdb -y"
+        echo
+        echo "You can also use a bash loop to complete the tasks:"
+        echo "for i in {b,c,e,f,g,i} ; do ./growrocks.sh sd${i} -y ; done"
+        echo "for i in {j..o} ; do ./growrocks.sh sd${i} -y ; done"
+        exit
+    fi
+    disk=$1
+
+    ### get the information needed
+
+    report=$(ceph-volume lvm list /dev/${disk})
+
+    osdid=$(echo "${report}" | awk '/======/' | grep -o '[0-9]\+')
+    metareport=$(ceph osd metadata osd.${osdid})
+
+    wal=$(echo "${metareport}" | grep -Po '"bluefs_wal_partition_path":.*?[^\\]",' | awk '{print $2}' | sed 's/"//g' | sed 's/,//')
+    rdb=$(echo "${metareport}" | grep -Po '"bluefs_db_partition_path":.*?[^\\]",' | awk '{print $2}' | sed 's/"//g' | sed 's/,//')
+
+    waldisk=$(echo ${wal} | grep -o '/[a-z]\+/[a-z]\+')
+    walpartno=$(echo ${wal} | grep -o '[0-9]\+')
+    rdbdisk=$(echo ${rdb} | grep -o '/[a-z]\+/[a-z]\+')
+    rdbpartno=$(echo ${rdb} | grep -o '[0-9]\+')
+
+    waluuid=$(echo "${report}" | awk '/wal uuid/ {print $3}')
+    rdbuuid=$(echo "${report}" | awk '/db uuid/ {print $3}')
+
+    parttype=$(sgdisk -i `echo ${wal} | grep -o '[0-9]\+'` ${waldisk} | awk '/GUID code/ {print $4}')
+    #waluuid=$(sgdisk -i `echo ${wal} | grep -o '[0-9]\+'` ${waldisk} | awk '/unique GUID/ {print $4}')
+
+    #rdbuuid=$(sgdisk -i `echo ${rdb} | grep -o '[0-9]\+'` ${rdbdisk} | awk '/unique GUID/ {print $4}')
+
+    ### is it worth us continuing
+    currentrdbsize=$(ceph-bluestore-tool show-label --path /var/lib/ceph/osd/ceph-${osdid}/ | grep -2 "/var/lib/ceph/osd/ceph-${osdid}/block.db" | awk -F":|," '/size/ {print $2}' | xargs)
+    if [[ ${currentrdbsize} == ${rocksdbbytesize} ]]
+    then
+       echo "The RocksDB for OSD${osdid} is already ${rocksdbsize}GB"
+       echo "Giving up"
+       exit 1
+    fi
+
+    ### output what we know
+
+    echo "This is OSD ${osdid}"
+    echo
+    echo "wal is on  ${wal}"
+    echo "db is on ${rdb}"
+    echo
+    echo "GUID code is ${partguid}"
+    echo
+    echo "rockdb uuid is ${rdbuuid}"
+    echo "wal uuid is ${waluuid}"
+
+    ### Now the real work
+
+    if [[ "$(systemctl show -p ActiveState --value ceph-osd@${osdid}.service)" == "active" ]] ; then
+        echo "OSD ${osdid} service is running - stopping it now"
+        systemctl stop ceph-osd@${osdid}.service
+        echo
+        echo "Success"
+        fi
+
+    # Find the first block of the largest available area of contiguous space
+    firstnewblock=$(sgdisk --first-in-largest ${rdbdisk})
+
+    newrdbpart=$(sgdisk -p ${rdbdisk} | tail -1 | \
+        awk -v rdbdisk=${rdbdisk} -v rocksdbsize=${rocksdbsize} -v parttype=${parttype} -v osdid=${osdid} -v firstnewblock=${firstnewblock} \
+        '{print "sgdisk --new=" $1+1 ":" firstnewblock ":+"rocksdbsize"Gib --change-name=\"" $1+1 ":osd " osdid " block.db\" --typecode=\"" $1+1 ":" parttype "\" " rdbdisk}')
+    echo "A new partition will be created using this command:"
+    echo $newrdbpart
+    eval ${newrdbpart}
+
+    # Partprobe to make sure we update the kernel partition table
+    /usr/sbin/partprobe
+    /usr/bin/partx -u ${rdbdisk}
+
+    # Now we have the new partition
+    newrdbpartno=$(sgdisk -p ${rdbdisk} | tail -1 | awk '{print $1}')
+    newrdbpart=${rdbdisk}${newrdbpartno}
+    echo "New partition is ${newrdbpart}"
+
+    # Copy the contents of the old db to the new partition
+    echo "Copy the contents of the old db to the new partition using:"
+    echo "dd status=progress if=${rdb} of=${newrdbpart}"
+    dd status=progress if=${rdb} of=${newrdbpart} bs=1M
+
+
+    # Delete the old partition and assign the GUID to the new one
+    #echo "Now delete the old partition and assign the GUID to the new one"
+    #echo "sgdisk --delete=${rdbpartno} --partition-guid=${newrdbpartno}:${rdbuuid} ${rdbdisk}"
+    #sgdisk --delete=${rdbpartno} --partition-guid=${newrdbpartno}:${rdbuuid} ${rdbdisk}
+    ### OR
+    # Non-destructive
+    echo "Now assign a random uuid to the old partition and assign the GUID to the new one:"
+    echo "sgdisk --partition-guid=${rdbpartno}:${fakeuuid} --partition-guid=${newrdbpartno}:${rdbuuid} ${rdbdisk}"
+    sgdisk --partition-guid=${rdbpartno}:${fakeuuid} --partition-guid=${newrdbpartno}:${rdbuuid} ${rdbdisk}
+
+    # Partprobe to make sure we update the kernel partition table
+    /usr/sbin/partprobe
+    /usr/bin/partx -u ${rdbdisk}${walpartno}
+
+    # remove the symlink, and set ownership everywhere
+    rm /var/lib/ceph/osd/ceph-${osdid}/block.db
+    ln -s /dev/disk/by-partuuid/${rdbuuid} /var/lib/ceph/osd/ceph-${osdid}/block.db
+    chown -h ceph:ceph /var/lib/ceph/osd/ceph-${osdid}/block.db
+    chown -h ceph:ceph ${newrdbpart}
+
+    # Now grow it
+    echo "Finally grow the RocksDB"
+    echo "ceph-bluestore-tool bluefs-bdev-expand --path /var/lib/ceph/osd/ceph-${osdid}"
+    ceph-bluestore-tool bluefs-bdev-expand --path /var/lib/ceph/osd/ceph-${osdid}
+
+    #restart the device
+    echo "restarting osd ${osdid}"
+    systemctl start ceph-osd@${osdid}.service
+    echo
+    echo "Success"
+    echo
+
+    # This is a safer place to delete the old partition
+    # Let's check it actually is running first
+    if [[ $2 == "-y" ]]
+    then
+        echo "OK - running sgdisk --delete=${rdbpartno} ${rdbdisk}"
+        sgdisk --delete=${rdbpartno} ${rdbdisk}
+        echo "Now running partprobe to refresh the kernel"
+        /usr/sbin/partprobe
+        /usr/bin/partx -u ${rdbdisk}${walpartno}
+        echo "Success"
+        echo
+    else
+        if [[ "$(systemctl show -p ActiveState --value ceph-osd@${osdid}.service)" == "active" ]]
+            then
+                echo "All done and the Service successfully started"
+                echo
+                read -p "Do you want to delete the old RocksDB partition [y/n]? " -n 1 -r
+                echo
+                    if [[ $REPLY =~ ^[Yy]$ ]]
+                        then
+                            echo "OK - running sgdisk --delete=${rdbpartno} ${rdbdisk}"
+                            sgdisk --delete=${rdbpartno} ${rdbdisk}
+                            echo "Now running partprobe to refresh the kernel"
+                            /usr/sbin/partprobe
+                            /usr/bin/partx -u ${rdbdisk}
+                            echo "Success"
+                            echo
+                        else
+                            echo "You will need to go and clean up by hand with this command:"
+                            echo "sgdisk --delete=${rdbpartno} ${rdbdisk}"
+                    fi
+        fi
+    fi
+    # At this stage move the WAL to clear some contiguous space for the next one of these
+    # which means stopping the service again
+    if [[ "$(systemctl show -p ActiveState --value ceph-osd@${osdid}.service)" == "active" ]] ; then
+        echo "OSD ${osdid} service is running - stopping it now"
+        echo "So that we can move the WAL partition."
+        systemctl stop ceph-osd@${osdid}.service
+        echo
+        echo "Success"
+        echo
+    fi
+
+    # We need to work out if there is already something at the start of the disk
+    firstusedblock=$(fdisk -l ${rdbdisk} | grep -1 Device | tail -1 | awk '{print $2}')
+    if [[ $firstusedblock != 2048 ]]
+        then moveto=2047
+        else
+            #we know what the wal is so now the old rocksdb is gone we just need to know
+            # where the end of the previous partition is
+            moveto=$(fdisk -l ${rdbdisk} | grep -B 1 ${wal} | head -1 | awk '{print $3}')
+    fi
+
+    # Now move the partition
+    echo "Moving the WAL partition to give us contiguous free space"
+    # no-reread stops sfdisk from checking to see if anything else is accessing the disk - otherwise this will always fail.
+    echo "expr ${moveto} + 1  | sfdisk ${rdbdisk} -N ${walpartno} --move-data --no-reread"
+    expr ${moveto} + 1  | sfdisk ${rdbdisk} -N ${walpartno} --move-data --no-reread || true
+
+    # Reread the partition table just to be sure
+    /usr/sbin/partprobe
+    /usr/bin/partx -u ${rdbdisk}${walpartno}
+    echo "Reread the partition table since it is usually busy:"
+    echo "/usr/bin/partx -u ${rdbdisk}${walpartno}"
+    sleep 2
+
+    # For some reason this changes the permissions on the device!?
+    echo "Change permissions on ${wal} and ${newrdbpart}"
+    chown -h ceph:ceph ${wal}
+    chown -h ceph:ceph ${newrdbpart}
+
+    # And start the service again!
+    echo "systemctl start ceph-osd@${osdid}.service"
+    systemctl start ceph-osd@${osdid}.service
+    echo
+    echo "Success"
+    echo
+
+    # More concise report
+    echo "ceph-bluestore-tool show-label --dev /var/lib/ceph/osd/ceph-${osdid}/block.db"
+    ceph-bluestore-tool show-label --dev /var/lib/ceph/osd/ceph-${osdid}/block.db
+
+The following is an example output from a single run on sdo:
+
+Expand for full output:
+
+    root@bluefs-osd3:~# ./rocksexpand.sh sdo -y
+    This is OSD 35
+
+    wal is on  /dev/sdh12
+    db is on /dev/sdh11
+
+    GUID code is
+
+    rockdb uuid is d610b7db-37b7-4460-8e00-0844119c488a
+    wal uuid is 7a58dd58-4ac0-4d40-a590-4db58636a9ae
+    OSD 35 service is running - stopping it now
+
+    Success
+    A new partition will be created using this command:
+    sgdisk --new=18:788776960:+64Gib --change-name="18:osd 35 block.db" --typecode="18:0FC63DAF-8483-4772-8E79-3D69D8477DE4" /dev/sdh
+    Setting name!
+    partNum is 17
+    Warning: The kernel is still using the old partition table.
+    The new table will be used at the next reboot or after you
+    run partprobe(8) or kpartx(8)
+    The operation has completed successfully.
+    New partition is /dev/sdh18
+    Copy the contents of the old db to the new partition using:
+    dd status=progress if=/dev/sdh11 of=/dev/sdh18
+    21403533312 bytes (21 GB, 20 GiB) copied, 62 s, 345 MB/s
+    20480+0 records in
+    20480+0 records out
+    21474836480 bytes (21 GB, 20 GiB) copied, 97.6195 s, 220 MB/s
+    Now assign a random uuid to the old partition and assign the GUID to the new one:
+    sgdisk --partition-guid=11:8d47d212-f2d8-4ba4-b8df-a5c4a3d7d632 --partition-guid=18:d610b7db-37b7-4460-8e00-0844119c488a /dev/sdh
+    Warning: The kernel is still using the old partition table.
+    The new table will be used at the next reboot or after you
+    run partprobe(8) or kpartx(8)
+    The operation has completed successfully.
+    Finally grow the RocksDB
+    ceph-bluestore-tool bluefs-bdev-expand --path /var/lib/ceph/osd/ceph-35
+    inferring bluefs devices from bluestore path
+    0 : device size 0x1400000 : own 0x[1000~13ff000] = 0x13ff000 : using 0xdff000(14 MiB)
+    1 : device size 0x1000000000 : own 0x[2000~4ffffe000] = 0x4ffffe000 : using 0xdfe000(14 MiB)
+    2 : device size 0x9187fc00000 : own 0x[45dadf50000~5d23d50000] = 0x5d23d50000 : using 0x0(0 B)
+    Expanding...
+    1 : expanding  from 0x500000000 to 0x1000000000
+    1 : size label updated to 68719476736
+    restarting osd 35
+
+    Success
+
+    OK - running sgdisk --delete=11 /dev/sdh
+    Warning: The kernel is still using the old partition table.
+    The new table will be used at the next reboot or after you
+    run partprobe(8) or kpartx(8)
+    The operation has completed successfully.
+    Now running partprobe to refresh the kernel
+    Success
+
+    OSD 35 service is running - stopping it now
+    So that we can move the WAL partition.
+
+    Success
+
+    Moving the WAL partition to give us contiguous free space
+    expr 209922047 + 1  | sfdisk /dev/sdh -N 12 --move-data --no-reread
+    Disk /dev/sdh: 447.1 GiB, 480103981056 bytes, 937703088 sectors
+    Disk model: Micron_5200_MTFD
+    Units: sectors of 1 * 512 = 512 bytes
+    Sector size (logical/physical): 512 bytes / 4096 bytes
+    I/O size (minimum/optimal): 4096 bytes / 4096 bytes
+    Disklabel type: gpt
+    Disk identifier: FAC79920-6EC5-4AF2-850A-0C0FC67A46C1
+
+    Old situation:
+
+    Device         Start       End   Sectors Size Type
+    /dev/sdh2       2048     43007     40960  20M Linux filesystem
+    /dev/sdh4      43008     83967     40960  20M Linux filesystem
+    /dev/sdh6      83968    124927     40960  20M Linux filesystem
+    /dev/sdh8     124928    165887     40960  20M Linux filesystem
+    /dev/sdh10 209881088 209922047     40960  20M Linux filesystem
+    /dev/sdh12 251865088 251906047     40960  20M Linux filesystem
+    /dev/sdh13 251906048 386123775 134217728  64G Linux filesystem
+    /dev/sdh14 386123776 520341503 134217728  64G Linux filesystem
+    /dev/sdh15 520341504 654559231 134217728  64G Linux filesystem
+    /dev/sdh16 654559232 788776959 134217728  64G Linux filesystem
+    /dev/sdh17    165888 134383615 134217728  64G Linux filesystem
+    /dev/sdh18 788776960 922994687 134217728  64G Linux filesystem
+
+    Partition table entries are not in disk order.
+
+    /dev/sdh12:
+    New situation:
+    Disklabel type: gpt
+    Disk identifier: FAC79920-6EC5-4AF2-850A-0C0FC67A46C1
+
+    Device         Start       End   Sectors Size Type
+    /dev/sdh2       2048     43007     40960  20M Linux filesystem
+    /dev/sdh4      43008     83967     40960  20M Linux filesystem
+    /dev/sdh6      83968    124927     40960  20M Linux filesystem
+    /dev/sdh8     124928    165887     40960  20M Linux filesystem
+    /dev/sdh10 209881088 209922047     40960  20M Linux filesystem
+    /dev/sdh12 209922048 209963007     40960  20M Linux filesystem
+    /dev/sdh13 251906048 386123775 134217728  64G Linux filesystem
+    /dev/sdh14 386123776 520341503 134217728  64G Linux filesystem
+    /dev/sdh15 520341504 654559231 134217728  64G Linux filesystem
+    /dev/sdh16 654559232 788776959 134217728  64G Linux filesystem
+    /dev/sdh17    165888 134383615 134217728  64G Linux filesystem
+    /dev/sdh18 788776960 922994687 134217728  64G Linux filesystem
+
+    Partition table entries are not in disk order.
+
+    Data move:
+     typescript file: /root/sfdisk-sdh12.move
+     old start: 251865088, new start: 209922048 (move 40960 sectors)
+
+    The partition table has been altered.
+    Calling ioctl() to re-read partition table.
+    Re-reading the partition table failed.: Device or resource busy
+    The kernel still uses the old table. The new table will be used at the next reboot or after you run partprobe(8) or kpartx(8).
+    Syncing disks.
+    Reread the partition table since it is usually busy:
+    /usr/sbin/partprobe
+    Change permissions on /dev/sdh12 and /dev/sdh18
+    systemctl start ceph-osd@35.service
+
+    Success
+
+    ceph-bluestore-tool show-label --dev /var/lib/ceph/osd/ceph-35/block.db
+    {
+        "/var/lib/ceph/osd/ceph-35/block.db": {
+            "osd_uuid": "524bf4bc-9db6-4fab-ad91-efa572129520",
+            "size": 68719476736,
+            "btime": "2020-11-23 19:22:31.339547",
+            "description": "bluefs db"
+        }
+    }
+
+Please send an email to support@softiron.com if you encounter any
+issues.
+
+SoftIron Customer Portal
+
+Copyright © SoftIron Limited, 2021. All rights reserved.

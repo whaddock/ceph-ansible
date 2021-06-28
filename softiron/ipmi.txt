@@ -1,0 +1,91 @@
+SoftIron
+
+
+
+INTELLIGENT PLATFORM MANAGEMENT INTERFACE
+
+
+Each cluster is equipped with Serial Over LAN connectivity features via
+Intelligent Platform Management Interface (IPMI) allowing for complete
+management of each node at any power state. This provides accessibility
+to the system while powered off, through boot cycles, and during live
+operation. In order to utilize these features, you must first create a
+user and enable it on each device. Below are the steps for creating a
+new user and some of the common commands you may wish to utilize at
+different stages of your clusters operation.
+
+
+# Create and Enable IPMI User
+
+Remotely connect via ssh to the public IP of one of your nodes (refer to
+the equipment register in your portal for system IP addresses).
+
+    ssh root@172.31.2.112
+    ipmitool user list
+
+The above command will show all of the currently defined users and ID
+slots available for creating additional users. Next, you need to set the
+username and password.
+
+    ipmitool user set name 10 "mynewuser"
+    ipmitool user set password 10 "p@ssw0rd"
+    ipmitool user enable 10
+    ipmitool channel setaccess 1 10 privilege=4
+
+
+# Open Serial Over LAN Session
+
+    ipmitool -H <hostname or ip> -U mynewuser -P p@ssw0rd -I lanplus sol activate
+
+
+# Deactivate Serial Over LAN Session
+
+    ipmitool -H <hostname or ip> -U mynewuser -P p@ssw0rd -I lanplus sol
+    deactivate
+
+
+# Power Status of Host
+
+    ipmitool -H <hostname or ip> -U mynewuser -P p@ssw0rd chassis power status
+
+
+# Power On the Host
+
+    ipmitool -H <hostname or ip> -U mynewuser -P p@ssw0rd chassis power on
+
+
+# Power Off the Host
+
+    ipmitool -H <hostname or ip> -U mynewuser -P p@ssw0rd chassis power off
+
+
+# Power Cycle the Host
+
+    ipmitool -H <hostname or ip> -U mynewuser -P p@ssw0rd chassis power cycle
+
+
+# Shut Down the Host Gracefully
+
+    ipmitool -H <hostname or ip> -U mynewuser -P p@ssw0rd chassis power soft
+
+
+# Identify Node (will blink an orange light on the front of the chassis per "interval" in seconds)
+
+    ipmitool chassis identify <interval>
+
+
+# Changing BMC from DHCP to Static IPs
+
+    If the need to change BMC from DHCP to a static IP address scheme arises, follow these steps on each node:
+
+_Single node example:_
+
+    ssh root@172.31.2.112
+    ipmitool lan set 1 ipsrc static
+    ipmitool lan set 1 ipaddr 192.168.0.100
+    ipmitool lan set 1 netmask 255.255.255.0
+    ipmitool lan set 1 defgw ipaddr 192.168.0.1
+
+SoftIron Customer Portal
+
+Copyright © SoftIron Limited, 2021. All rights reserved.

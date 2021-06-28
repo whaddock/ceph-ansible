@@ -1,0 +1,210 @@
+SoftIron
+
+
+
+BMC FIELD UPDATE
+
+
+# Update Considerations
+
+Note: This procedure can be destructive, it is strongly recommended to
+contact your SoftIron Solutions Architect prior to completing these
+steps.
+
+This document covers a single method for upgrading a SoftIron HyperDrive
+BMC in the field.
+
+# Ceph Preparation
+
+If you are updating a BMC on an appliance currently implemented in a
+Ceph cluster, follow these steps, otherwise you can skip to BMC
+Installation.
+
+SSH to a node (_typically one of the monitors_) in your cluster and
+validate it is healthy:
+
+    ceph health detail
+
+If you are updating the entire cluster and have the freedom to pause it,
+do the following then you can skip to BMC Installation:
+
+    ceph osd set nodown
+    ceph osd set norebalance
+    ceph osd set norecover
+    ceph osd set nobackfill
+    ceph osd set noout
+    ceph osd set pause
+
+If you are not able to pause the entire cluster or are only performing
+this update on a single node, do the following:
+
+    ceph osd set nodown
+    ceph osd set norebalance
+    ceph osd set norecover
+    ceph osd set nobackfill
+    ceph osd set noout
+
+This will ensure Ceph does not attempt to kick out the node or any OSDs
+when it is rebooting.
+
+Determine which OSDs are associated to the node in question.
+
+    ceph osd tree
+
+Expand for example output
+
+    root@hd120-2:~# ceph osd tree
+    ID CLASS WEIGHT    TYPE NAME        STATUS REWEIGHT PRI-AFF
+    -1       327.44147 root default
+    -5       109.14716     host hd120-1
+     0   hdd   9.09560         osd.0        up  1.00000 1.00000
+     1   hdd   9.09560         osd.1        up  1.00000 1.00000
+     2   hdd   9.09560         osd.2        up  1.00000 1.00000
+     3   hdd   9.09560         osd.3        up  1.00000 1.00000
+     4   hdd   9.09560         osd.4        up  1.00000 1.00000
+     5   hdd   9.09560         osd.5        up  1.00000 1.00000
+     6   hdd   9.09560         osd.6        up  1.00000 1.00000
+     7   hdd   9.09560         osd.7        up  1.00000 1.00000
+     8   hdd   9.09560         osd.8        up  1.00000 1.00000
+     9   hdd   9.09560         osd.9        up  1.00000 1.00000
+    10   hdd   9.09560         osd.10       up  1.00000 1.00000
+    11   hdd   9.09560         osd.11       up  1.00000 1.00000
+    -3       109.14716     host hd120-2
+    12   hdd   9.09560         osd.12       up  1.00000 1.00000
+    13   hdd   9.09560         osd.13       up  1.00000 1.00000
+    14   hdd   9.09560         osd.14       up  1.00000 1.00000
+    15   hdd   9.09560         osd.15       up  1.00000 1.00000
+    16   hdd   9.09560         osd.16       up  1.00000 1.00000
+    17   hdd   9.09560         osd.17       up  1.00000 1.00000
+    18   hdd   9.09560         osd.18       up  1.00000 1.00000
+    19   hdd   9.09560         osd.19       up  1.00000 1.00000
+    20   hdd   9.09560         osd.20       up  1.00000 1.00000
+    21   hdd   9.09560         osd.21       up  1.00000 1.00000
+    22   hdd   9.09560         osd.22       up  1.00000 1.00000
+    23   hdd   9.09560         osd.23       up  1.00000 1.00000
+    -7       109.14716     host hd120-3
+    24   hdd   9.09560         osd.24       up  1.00000 1.00000
+    25   hdd   9.09560         osd.25       up  1.00000 1.00000
+    26   hdd   9.09560         osd.26       up  1.00000 1.00000
+    27   hdd   9.09560         osd.27       up  1.00000 1.00000
+    28   hdd   9.09560         osd.28       up  1.00000 1.00000
+    29   hdd   9.09560         osd.29       up  1.00000 1.00000
+    30   hdd   9.09560         osd.30       up  1.00000 1.00000
+    31   hdd   9.09560         osd.31       up  1.00000 1.00000
+    32   hdd   9.09560         osd.32       up  1.00000 1.00000
+    33   hdd   9.09560         osd.33       up  1.00000 1.00000
+    34   hdd   9.09560         osd.34       up  1.00000 1.00000
+    35   hdd   9.09560         osd.35       up  1.00000 1.00000
+
+Find the node and note the osd ID's. In this example hd120-2 is used:
+OSD ID's 12-23 must be downed to prevent corruption during reboot:
+
+    for id in {12..23} ; do ceph osd out $id ; done
+
+Verify they are down by reviewing the REWEIGHT column of ceph osd tree:
+
+Expand for example output
+
+    root@hd120-2:~# ceph osd tree
+    ID CLASS WEIGHT    TYPE NAME        STATUS REWEIGHT PRI-AFF
+    -1       327.44147 root default
+    -5       109.14716     host hd120-1
+     0   hdd   9.09560         osd.0        up  1.00000 1.00000
+     1   hdd   9.09560         osd.1        up  1.00000 1.00000
+     2   hdd   9.09560         osd.2        up  1.00000 1.00000
+     3   hdd   9.09560         osd.3        up  1.00000 1.00000
+     4   hdd   9.09560         osd.4        up  1.00000 1.00000
+     5   hdd   9.09560         osd.5        up  1.00000 1.00000
+     6   hdd   9.09560         osd.6        up  1.00000 1.00000
+     7   hdd   9.09560         osd.7        up  1.00000 1.00000
+     8   hdd   9.09560         osd.8        up  1.00000 1.00000
+     9   hdd   9.09560         osd.9        up  1.00000 1.00000
+    10   hdd   9.09560         osd.10       up  1.00000 1.00000
+    11   hdd   9.09560         osd.11       up  1.00000 1.00000
+    -3       109.14716     host hd120-2
+    12   hdd   9.09560         osd.12       up        0 1.00000
+    13   hdd   9.09560         osd.13       up        0 1.00000
+    14   hdd   9.09560         osd.14       up        0 1.00000
+    15   hdd   9.09560         osd.15       up        0 1.00000
+    16   hdd   9.09560         osd.16       up        0 1.00000
+    17   hdd   9.09560         osd.17       up        0 1.00000
+    18   hdd   9.09560         osd.18       up        0 1.00000
+    19   hdd   9.09560         osd.19       up        0 1.00000
+    20   hdd   9.09560         osd.20       up        0 1.00000
+    21   hdd   9.09560         osd.21       up        0 1.00000
+    22   hdd   9.09560         osd.22       up        0 1.00000
+    23   hdd   9.09560         osd.23       up        0 1.00000
+    -7       109.14716     host hd120-3
+    24   hdd   9.09560         osd.24       up  1.00000 1.00000
+    25   hdd   9.09560         osd.25       up  1.00000 1.00000
+    26   hdd   9.09560         osd.26       up  1.00000 1.00000
+    27   hdd   9.09560         osd.27       up  1.00000 1.00000
+    28   hdd   9.09560         osd.28       up  1.00000 1.00000
+    29   hdd   9.09560         osd.29       up  1.00000 1.00000
+    30   hdd   9.09560         osd.30       up  1.00000 1.00000
+    31   hdd   9.09560         osd.31       up  1.00000 1.00000
+    32   hdd   9.09560         osd.32       up  1.00000 1.00000
+    33   hdd   9.09560         osd.33       up  1.00000 1.00000
+    34   hdd   9.09560         osd.34       up  1.00000 1.00000
+    35   hdd   9.09560         osd.35       up  1.00000 1.00000
+
+Time to install the update!
+
+# BMC Installation
+
+The following steps can be run from anywhere that has SSH access to the
+node(s) in question. For this example it will be executed from the SoC
+(OS) of the node to be upgraded.
+
+Gather the IP address for the BMC. This can be found via IPMI or any
+other method you deem worthy:
+
+    ipmitool lan print
+
+Download the needed tarball from the SoftIron CDN. For this example
+bmc-v3.05.tar.gz.
+
+If needed, reset the BMC password using the bmc_password command and
+entering the desired password twice.
+
+    root@sda-args:~# bmc_password
+    Enter password.  Limited to 16 characters
+    Enter password again.
+
+    BMC Password Updated
+
+NOTE: THE NODE THIS IS INSTALLED ON WILL REBOOT IMMEDIATELY AFTER
+INSTALLATION.
+
+    wget https://cdn.softiron.com/barton/bmc-v4.21.tar.gz
+    tar -zxvf bmc-v4.21.tar.gz
+    cd bmc-v4.21
+    ./flash_over_ssh.sh rootfs.ubifs <bmc ip>
+
+Time to reinstate Ceph!
+
+# Ceph Reinstatement
+
+On a node in the cluster (typically one of the monitors), bring the
+OSD's back online and unset all the things.
+
+    for id in {12..23}; do ceph osd in $id ; done
+    ceph osd unset nodown
+    ceph osd unset norebalance
+    ceph osd unset norecover
+    ceph osd unset nobackfill
+    ceph osd unset noout
+
+NOTE: IF THIS WAS A CLUSTER-WIDE CHANGE, DON'T FORGET TO
+ceph osd unset pause.
+
+# Validate
+
+Check the tree and health:
+
+    ceph osd tree
+    ceph health detail
+
+SoftIron Customer Portal
+
+Copyright © SoftIron Limited, 2021. All rights reserved.

@@ -1,0 +1,559 @@
+SoftIron
+
+
+
+MANUAL CEPH INSTALL (NAUTILUS)
+
+
+------------------------------------------------------------------------
+
+When you initially receive a Ceph cluster from SoftIron, either POC or
+Production, your cluster is typically configured based on previous
+discussions with your Solutions Architect. However, there are times when
+you may need to re-deploy your cluster. This document outlines the
+features of your SoftIron appliances and a manual method to implement
+the installation of Ceph (NOTE: The steps outlined within this document
+may change with different versions of Ceph, check for updates often.
+Additionally, you are not required to follow these steps verbatim, you
+can complete all the tasks using automation or via configuration
+management as desired).
+
+_NOTE: These instructions are verbose to provide you all the information
+needed to utilize your deployment tools of choice._
+
+
+# SoftIron Chassis Details
+
+# HD11120 Density Storage Node
+
+# Specifications
+
+  ----------------------------------- -----------------------------------
+  Model                               HD11120
+
+  Model Type                          HDD Storage Node
+
+  Raw Storage Capacity                120TB
+
+  Drive Configuration                 120TB (12x 10TB HDD)
+                                      960GB (2x 480GB SSD)
+
+  Networking                          2x Interfaces
+                                      (10GbE)
+
+  Data Resiliency                     High Availability per service /
+                                      protocol
+
+  Storage Protocols                   Ceph-FS, RBD, S3
+
+  Storage Type                        Block, File, Object
+
+  Management                          1x 1GbE, IPMI, HyperDrive Manager
+
+  Power Supply                        Redundancy Power
+                                      (Dual Supplies)
+                                      120–240V, 50–60Hz
+
+  Power Consumption                   < 125W
+
+  Dimensions                          H 43 mm / 1.72 in
+                                      W 426 mm / 16.9 in
+                                      L 869 mm / 34.25 in
+
+  Weight                              21.8 kg / 48 lb
+  ----------------------------------- -----------------------------------
+
+# Disk Details
+
+The disk configuration for SoftIron appliances utilizes a caddy system
+with 4 HDDs per caddy and 2 SSD journal drives. When implementing OSD
+nodes, mapping a disk with the journal intact is important to ensure
+proper performance. This configuration translates to the following
+logical map:
+
+  Disk       Journal Disk
+  ---------- --------------
+  /dev/sdb   /dev/sdd
+  /dev/sdc   /dev/sdd
+  /dev/sde   /dev/sdd
+  /dev/sdf   /dev/sdd
+  /dev/sdg   /dev/sdd
+  /dev/sdi   /dev/sdd
+  /dev/sdj   /dev/sdh
+  /dev/sdk   /dev/sdh
+  /dev/sdl   /dev/sdh
+  /dev/sdm   /dev/sdh
+  /dev/sdn   /dev/sdh
+  /dev/sdo   /dev/sdh
+
+
+# Ceph Components
+
+-   Monitor
+
+      Maintains or "monitors" the state of the cluster, including the
+      monitor map, manager map, OSD map and the CRUSH map.
+
+-   OSD
+
+      a Ceph OSD (object storage daemon) stores data, handles balancing,
+      replication, recovery, and provides details to Ceph Monitors and
+      Managers by checking other Ceph OSDs for a heartbeat
+
+-   MDS
+
+      A Ceph Metadata Server stores metadata on behalf of the Ceph
+      Filesystem (CephFS).
+
+-   Managers
+
+      The Ceph manager daemon is responsible for keeping track of
+      runtime metrics and the current state of the Ceph cluster,
+      including storage utilization, current performance metrics, and
+      system load.
+
+
+# Pre-Setup Tasks
+
+_Example cluster details:_
+
+  Hostname    IP Address     Role
+  ----------- -------------- ----------------
+  ceph-mon    192.168.3.19   admin, monitor
+  ceph-rgw    192.168.3.20   rgw
+  ceph120-1   192.168.3.16   osd
+  ceph120-2   192.168.3.15   osd
+  ceph120-3   192.168.3.14   osd
+
+# Recovery Partition
+
+Your SoftIron HyperDrive appliances all come with a recovery partition
+for easily resetting your system back to its default state. You have the
+option to leave networking settings as they were originally configured
+or you can wipe them out as needed with the -f flag. SSH to each
+HyperDrive appliance and run the following to view and set recovery
+options:
+
+    recovery-restore -h
+    usage: recovery-restore [-h] [-f] [-r] [-v]
+
+    optional arguments:
+      -h, --help     show this help message and exit
+      -f, --full     Restore full state, do not save network config.
+      -r, --really   Don't ask user for confirmation.
+      -v, --verbose  Verbose output.
+
+Additionally, you have the option to capture a new recovery partition
+based on the current settings using recovery-save. You can view options
+by running the following:
+
+    recovery-save -h
+    usage: recovery-save [-h] [-r] [-v]
+
+    optional arguments:
+      -h, --help     show this help message and exit
+      -r, --really   Don't ask user for confirmation.
+      -v, --verbose  Verbose output.
+
+# Add Hostnames
+
+Add the hostnames of each server to /etc/hosts ON EACH NODE IN THE
+CLUSTER. _Example hosts details:_
+
+    127.0.0.1   localhost
+
+    # The following lines are desirable for IPv6 capable hosts
+    ::1     localhost ip6-localhost ip6-loopback
+    ff02::1 ip6-allnodes
+    ff02::2 ip6-allrouters
+
+    192.168.3.20    ceph-rgw.None ceph-rgw
+    192.168.3.19    ceph-mon.None ceph-mon
+    192.168.3.16    ceph120-1.None ceph120-1
+    192.168.3.15    ceph120-2.None ceph120-2
+    192.168.3.14    ceph120-3.None ceph120-3
+
+# Add SoftIron Nautilus Repository
+
+Create or overwrite /etc/apt/sources.list.d/ceph.list ON EACH SERVER IN
+THE CLUSTER. Add
+deb https://cdn.softiron.com/distro/packages buster-softiron-ceph-nautilus-v14.2.20-si1 main
+
+    cat > /etc/apt/sources.list.d/ceph.list << EOL
+    deb https://cdn.softiron.com/distro/packages buster-softiron-ceph-nautilus-v14.2.20-si1 main
+    EOL
+
+# Update your system
+
+    sudo apt update && sudo apt -y upgrade
+
+
+# Prepare Admin Node
+
+As noted above, the monitor node also has the 'Admin' role and will be
+used to deploy some settings on all the Ceph nodes. Since you just
+updated your repository, install ceph-deploy.
+
+    apt-get install -y ceph ceph-deploy -t buster-softiron-ceph-nautilus-v14.2.20-si1
+
+
+# Prepare Ceph Nodes
+
+The admin node must have password-less SSH access to all the Ceph nodes.
+When ceph-deploy logs in to a Ceph node as a user, that user must have
+passwordless sudo privileges.
+
+# Add SSH User
+
+Add SSH user on ALL CEPH NODES
+
+    export USER_NAME="ceph-admin"
+    export USER_PASS="aR3@llyStrOngP@ssw0rd"
+    sudo useradd --create-home -s /bin/bash ${USER_NAME}
+    echo "${USER_NAME}:${USER_PASS}"|sudo chpasswd
+    echo "${USER_NAME} ALL = (root) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/${USER_NAME}
+    sudo chmod 0440 /etc/sudoers.d/${USER_NAME}
+
+# Generate SSH keys
+
+Generate the SSH keys ON THE ADMIN NODE using the ceph-admin user you
+just created, using the default settings.
+
+    su - ceph-admin
+    ssh-keygen
+
+Expand for _example output_
+
+    Generating public/private rsa key pair.
+    Enter file in which to save the key (/home/ceph-admin/.ssh/id_rsa):
+    Created directory '/home/ceph-admin/.ssh'.
+    Enter passphrase (empty for no passphrase):
+    Enter same passphrase again:
+    Your identification has been saved in /home/ceph-admin/.ssh/id_rsa.
+    Your public key has been saved in /home/ceph-admin/.ssh/id_rsa.pub.
+    The key fingerprint is:
+    SHA256:+t6FXthrjN5QH3A4Go4qjmzhkzznp3MPuLxgBu6dyAg ceph-admin@ceph-mon
+    The key's randomart image is:
+    +---[RSA 2048]----+
+    |                 |
+    |             .   |
+    |          . + .  |
+    |         o o +   |
+    |.       S o . .  |
+    |...  . o   = . . |
+    |E++oo +   +o+ .  |
+    |=+X=+ooo o.=o.   |
+    |.=oBB* o+.+.o    |
+    +----[SHA256]-----+
+
+# Configure SSH
+
+Configure ~/.ssh/config with each host FROM THE ADMIN NODE:
+
+    cat >> /home/ceph-admin/.ssh/config <<EOL
+    Host ceph-mon
+      Hostname ceph-mon
+      User ceph-admin
+    Host ceph-rgw
+      Hostname ceph-rgw
+      User ceph-admin
+    Host ceph120-1
+      Hostname ceph120-1
+      User ceph-admin
+    Host ceph120-2
+      Hostname ceph120-2
+      User ceph-admin
+    Host ceph120-3
+      Hostname ceph120-3
+      User ceph-admin
+    EOL
+
+# Copy SSH Key
+
+Copy the ssh key to each node in the cluster FROM THE ADMIN NODE
+
+    for i in ceph-mon ceph-rgw ceph120-1 ceph120-2 ceph120-3; do ssh-copy-id $i ; done
+
+You will be prompted to continue connecting (type yes) and asked for the
+ceph-admin password you created in the section Add SSH User.
+
+
+# Deploy the Cluster
+
+# Initialize Monitors
+
+From the Admin node, initialize your monitors. In this configuration we
+only have 1 monitor (not a recommended production configuration),
+however, you can run the command with a list of host names to
+accommodate your configuration.
+
+Deploy a new monitor. _If adding more than one, use space as the
+delimiter: ... new ceph-mon ceph-mon2 ceph-mon3_
+
+    mkdir ~/ceph-deploy && cd ~/ceph-deploy
+    ceph-deploy new ceph-mon
+
+Expand for _example output_
+
+    [ceph_deploy.conf][DEBUG ] found configuration file at: /home/ceph-admin/.cephdeploy.conf
+    [ceph_deploy.cli][INFO  ] Invoked (2.0.2): /usr/bin/ceph-deploy new ceph-mon
+    [ceph_deploy.cli][INFO  ] ceph-deploy options:
+    [ceph_deploy.cli][INFO  ]  username                      : None
+    [ceph_deploy.cli][INFO  ]  verbose                       : False
+    [ceph_deploy.cli][INFO  ]  overwrite_conf                : False
+    [ceph_deploy.cli][INFO  ]  quiet                         : False
+    [ceph_deploy.cli][INFO  ]  cd_conf                       : <ceph_deploy.conf.cephdeploy.Conf instance at 0xffff81c045f0>
+    [ceph_deploy.cli][INFO  ]  cluster                       : ceph
+    [ceph_deploy.cli][INFO  ]  ssh_copykey                   : True
+    [ceph_deploy.cli][INFO  ]  mon                           : ['ceph-mon']
+    [ceph_deploy.cli][INFO  ]  func                          : <function new at 0xffff81bf0398>
+    [ceph_deploy.cli][INFO  ]  public_network                : None
+    [ceph_deploy.cli][INFO  ]  ceph_conf                     : None
+    [ceph_deploy.cli][INFO  ]  cluster_network               : None
+    [ceph_deploy.cli][INFO  ]  default_release               : False
+    [ceph_deploy.cli][INFO  ]  fsid                          : None
+    [ceph_deploy.new][DEBUG ] Creating new cluster named ceph
+    [ceph_deploy.new][INFO  ] making sure passwordless SSH succeeds
+    [ceph-mon][DEBUG ] connection detected need for sudo
+    [ceph-mon][DEBUG ] connected to host: ceph-mon
+    [ceph-mon][DEBUG ] detect platform information from remote host
+    [ceph-mon][DEBUG ] detect machine type
+    [ceph-mon][DEBUG ] find the location of an executable
+    [ceph-mon][INFO  ] Running command: sudo /bin/ip link show
+    [ceph-mon][INFO  ] Running command: sudo /bin/ip addr show
+    [ceph-mon][DEBUG ] IP addresses found: [u'192.168.3.19']
+    [ceph_deploy.new][DEBUG ] Resolving host ceph-mon
+    [ceph_deploy.new][DEBUG ] Monitor ceph-mon at 192.168.3.19
+    [ceph_deploy.new][DEBUG ] Monitor initial members are ['ceph-mon']
+    [ceph_deploy.new][DEBUG ] Monitor addrs are ['192.168.3.19']
+    [ceph_deploy.new][DEBUG ] Creating a random mon key...
+    [ceph_deploy.new][DEBUG ] Writing monitor keyring to ceph.mon.keyring...
+    [ceph_deploy.new][DEBUG ] Writing initial config to ceph.conf...
+
+# Install Ceph Packages
+
+Install Ceph packages on all nodes. Normally you can just run
+ceph-deploy but there is a bug that causes a failure, run the following
+on each node. NOTE: You can choose to remove or add packages here for
+the pieces you need (i.e. you don't need to install radosgw on osd nodes
+but it can be as a convenience). EITHER RUN AS root OR USE SUDO.
+
+    apt-get install -y ceph ceph-deploy radosgw -t buster-softiron-ceph-nautilus-v14.2.20-si1
+
+# Deploy Initial Monitors
+
+Create the initial monitor(s) by running the following:
+
+    ceph-deploy --overwrite-conf mon create-initial
+
+_NOTE: Several keyrings will be placed in your current working
+directory._
+
+# Deploy Manager Daemon
+
+Deploy the manager daemon on each of your Monitors. It is not mandatory
+to place mgr daemons on the same nodes as mons, but it is almost always
+sensible.
+
+    ceph-deploy --overwrite-conf mgr create ceph-mon
+
+# Add Metadata Servers
+
+If needed, add Metadata Servers
+
+    ceph-deploy --overwrite-conf mds create ceph-rgw
+
+# Copy Ceph Admin Key
+
+Copy the configuration file and admin key to all your nodes
+
+    ceph-deploy --overwrite-conf admin ceph-mon ceph-rgw ceph120-1 ceph120-2 ceph120-3
+
+# Copy OSD Keyring
+
+Copy the osd keyring to the OSD nodes. This need to be RUN AS ROOT.
+
+    su -
+    for i in ceph120-1 ceph120-2 ceph120-3; do scp /home/ceph-admin/ceph-deploy/ceph.bootstrap-osd.keyring ${i}:/var/lib/ceph/bootstrap-osd/ceph.keyring ; done
+
+# Add OSDs
+
+Because of the way we've manually deployed everything, we need to do the
+same ON EACH OF THE OSD NODES.
+
+# Wipe
+
+SSH to EACH OSD NODE as root and run the following:
+
+    for i in {b..o} ; do wipefs -a /dev/sd${i} ; done
+
+You should see something similar to:
+
+    /dev/sdb: 8 bytes were erased at offset 0x00001000 (gpt): 45 46 49 20 50 41 52 54
+    /dev/sdb: 8 bytes were erased at offset 0x9187ffff000 (gpt): 45 46 49 20 50 41 52 54
+    /dev/sdb: 2 bytes were erased at offset 0x000001fe (PMBR): 55 aa
+    /dev/sdb: calling ioctl to re-read partition table: Success
+    /dev/sdc: 8 bytes were erased at offset 0x00001000 (gpt): 45 46 49 20 50 41 52 54
+    /dev/sdc: 8 bytes were erased at offset 0x9187ffff000 (gpt): 45 46 49 20 50 41 52 54
+    /dev/sdc: 2 bytes were erased at offset 0x000001fe (PMBR): 55 aa
+    /dev/sdc: calling ioctl to re-read partition table: Success
+
+# Overwrite
+
+Overwrite for cleanliness
+
+    for i in {b..o} ; do dd if=/dev/zero of=/dev/sd${i} bs=4096k count=100 ; done
+
+You should see something similar to:
+
+    100+0 records in
+    100+0 records out
+    419430400 bytes (419 MB, 400 MiB) copied, 2.25459 s, 186 MB/s
+    100+0 records in
+    100+0 records out
+    419430400 bytes (419 MB, 400 MiB) copied, 2.29245 s, 183 MB/s
+
+# Zap
+
+Zap all the disks
+
+    for i in {b..o} ; do sgdisk --zap-all -- /dev/sd${i} ; done
+
+You should see something similar to:
+
+    Creating new GPT entries.
+    GPT data structures destroyed! You may now partition the disk using fdisk or
+    other utilities.
+    The operation has completed successfully.
+
+# Setup Disks
+
+At this point, the new OSD node(s) are ready to complete preparation of
+the disks and activate. It's important to obtain the existing osd id's
+so you can continue with the existing numbering scheme.
+
+Since you have only just prepared the OSD nodes, running the following
+command should show 0 OSD details.
+
+    ceph osd tree
+
+You should see something similar to:
+
+    ID CLASS WEIGHT TYPE NAME    STATUS REWEIGHT PRI-AFF
+    -1            0 root default
+
+We need to calculate the number of OSDs based on the number of OSD nodes
+in order to derive the OSD IDs we need to set on the system. As
+mentioned under Disk Details, the SoftIron HD11120 has 2 SSDs for the
+journals and 12 HDDs. Based on this information, simply multiply the
+number of OSD nodes you have by 12 to get the full number of OSDs within
+your cluster. In this example, we have 3 OSD nodes for a total of 36
+OSDs.
+
+Within the SoftIron HD11120, there are two SSD's used for rocks.db and
+write ahead log (wal). These are sdd and sdh and allocated as show
+below.
+
+# Prepare Journal Drives
+
+Since ceph moved to bluestore - i.e. no OS-level filesystem - it can
+pick up stale data from drives (presumably because ceph-disk doesn't
+clear them properly when creating new stores. In order to not have ceph
+think that there's an old OSD that it can't read, we need to forcibly
+wipe the first section of them.
+
+    sgdisk --clear /dev/sdd
+    sgdisk --clear /dev/sdh
+
+Create the db and wal partitions and set ceph as the owner.
+
+    for i in `seq 1 2 11` ; do sgdisk -n $i{}:0:+67108864K /dev/sdd; partprobe ; done
+    for i in `seq 2 2 12` ; do sgdisk -n $i{}:0:+4194304K /dev/sdd; partprobe ; done
+    for i in `seq 1 2 11` ; do sgdisk -n $i{}:0:+67108864K /dev/sdh; partprobe ; done
+    for i in `seq 2 2 12` ; do sgdisk -n $i{}:0:+4194304K /dev/sdh; partprobe ; done
+    for i in {1..12} ; do chown -R ceph:ceph /dev/sdd${i} ; done
+    for i in {1..12} ; do chown -R ceph:ceph /dev/sdh${i} ; done
+
+# Prepare and Activate Volumes
+
+This step is unique to each OSD node in the cluster. Begin numbering
+from 0 (if you are adding this node to an existing cluster, run
+ceph osd tree to reference your numbering scheme for this node),
+ceph120-1 will use OSD IDs 0-11, ceph120-2will use OSD IDs 12-23, and
+ceph120-3 will use OSD IDs 24-35. If you have more than 3 OSD nodes,
+continue with this numbering pattern until all OSDs have unique IDs
+(i.e. 36-47, 48-59, etc).
+
+_NOTE: If you want to utilize encryption, add --dmcrypt immediately
+after --bluestore in the following commands_
+
+ceph120-1
+
+    ceph-volume lvm prepare --bluestore --osd-id 0 --block.db /dev/sdd1 --block.wal /dev/sdd2 --data /dev/sdb
+    ceph-volume lvm prepare --bluestore --osd-id 1 --block.db /dev/sdd3 --block.wal /dev/sdd4 --data /dev/sdc
+    ceph-volume lvm prepare --bluestore --osd-id 2 --block.db /dev/sdd5 --block.wal /dev/sdd6 --data /dev/sde
+    ceph-volume lvm prepare --bluestore --osd-id 3 --block.db /dev/sdd7 --block.wal /dev/sdd8 --data /dev/sdf
+    ceph-volume lvm prepare --bluestore --osd-id 4 --block.db /dev/sdd9 --block.wal /dev/sdd10 --data /dev/sdg
+    ceph-volume lvm prepare --bluestore --osd-id 5 --block.db /dev/sdd11 --block.wal /dev/sdd12 --data /dev/sdi
+    ceph-volume lvm prepare --bluestore --osd-id 6 --block.db /dev/sdh1 --block.wal /dev/sdh2 --data /dev/sdj
+    ceph-volume lvm prepare --bluestore --osd-id 7 --block.db /dev/sdh3 --block.wal /dev/sdh4 --data /dev/sdk
+    ceph-volume lvm prepare --bluestore --osd-id 8 --block.db /dev/sdh5 --block.wal /dev/sdh6 --data /dev/sdl
+    ceph-volume lvm prepare --bluestore --osd-id 9 --block.db /dev/sdh7 --block.wal /dev/sdh8 --data /dev/sdm
+    ceph-volume lvm prepare --bluestore --osd-id 10 --block.db /dev/sdh9 --block.wal /dev/sdh10 --data /dev/sdn
+    ceph-volume lvm prepare --bluestore --osd-id 11 --block.db /dev/sdh11 --block.wal /dev/sdh12 --data /dev/sdo
+    ceph-volume lvm activate --all
+
+ceph120-2
+
+    ceph-volume lvm prepare --bluestore --osd-id 12 --block.db /dev/sdd1 --block.wal /dev/sdd2 --data /dev/sdb
+    ceph-volume lvm prepare --bluestore --osd-id 13 --block.db /dev/sdd3 --block.wal /dev/sdd4 --data /dev/sdc
+    ceph-volume lvm prepare --bluestore --osd-id 14 --block.db /dev/sdd5 --block.wal /dev/sdd6 --data /dev/sde
+    ceph-volume lvm prepare --bluestore --osd-id 15 --block.db /dev/sdd7 --block.wal /dev/sdd8 --data /dev/sdf
+    ceph-volume lvm prepare --bluestore --osd-id 16 --block.db /dev/sdd9 --block.wal /dev/sdd10 --data /dev/sdg
+    ceph-volume lvm prepare --bluestore --osd-id 17 --block.db /dev/sdd11 --block.wal /dev/sdd12 --data /dev/sdi
+    ceph-volume lvm prepare --bluestore --osd-id 18 --block.db /dev/sdh1 --block.wal /dev/sdh2 --data /dev/sdj
+    ceph-volume lvm prepare --bluestore --osd-id 19 --block.db /dev/sdh3 --block.wal /dev/sdh4 --data /dev/sdk
+    ceph-volume lvm prepare --bluestore --osd-id 20 --block.db /dev/sdh5 --block.wal /dev/sdh6 --data /dev/sdl
+    ceph-volume lvm prepare --bluestore --osd-id 21 --block.db /dev/sdh7 --block.wal /dev/sdh8 --data /dev/sdm
+    ceph-volume lvm prepare --bluestore --osd-id 22 --block.db /dev/sdh9 --block.wal /dev/sdh10 --data /dev/sdn
+    ceph-volume lvm prepare --bluestore --osd-id 23 --block.db /dev/sdh11 --block.wal /dev/sdh12 --data /dev/sdo
+    ceph-volume lvm activate --all
+
+ceph-120-3
+
+    ceph-volume lvm prepare --bluestore --osd-id 24 --block.db /dev/sdd1 --block.wal /dev/sdd2 --data /dev/sdb
+    ceph-volume lvm prepare --bluestore --osd-id 25 --block.db /dev/sdd3 --block.wal /dev/sdd4 --data /dev/sdc
+    ceph-volume lvm prepare --bluestore --osd-id 26 --block.db /dev/sdd5 --block.wal /dev/sdd6 --data /dev/sde
+    ceph-volume lvm prepare --bluestore --osd-id 27 --block.db /dev/sdd7 --block.wal /dev/sdd8 --data /dev/sdf
+    ceph-volume lvm prepare --bluestore --osd-id 28 --block.db /dev/sdd9 --block.wal /dev/sdd10 --data /dev/sdg
+    ceph-volume lvm prepare --bluestore --osd-id 29 --block.db /dev/sdd11 --block.wal /dev/sdd12 --data /dev/sdi
+    ceph-volume lvm prepare --bluestore --osd-id 30 --block.db /dev/sdh1 --block.wal /dev/sdh2 --data /dev/sdj
+    ceph-volume lvm prepare --bluestore --osd-id 31 --block.db /dev/sdh3 --block.wal /dev/sdh4 --data /dev/sdk
+    ceph-volume lvm prepare --bluestore --osd-id 32 --block.db /dev/sdh5 --block.wal /dev/sdh6 --data /dev/sdl
+    ceph-volume lvm prepare --bluestore --osd-id 33 --block.db /dev/sdh7 --block.wal /dev/sdh8 --data /dev/sdm
+    ceph-volume lvm prepare --bluestore --osd-id 34 --block.db /dev/sdh9 --block.wal /dev/sdh10 --data /dev/sdn
+    ceph-volume lvm prepare --bluestore --osd-id 35 --block.db /dev/sdh11 --block.wal /dev/sdh12 --data /dev/sdo
+    ceph-volume lvm activate --all
+
+# Validate
+
+Validating it all works is the final step. The two main things to look
+for are HEALTH_OK and all of the OSDs showing as up.
+
+    ceph -s
+    ceph osd tree
+
+With the implementation of Ceph Nautilus 14.2.20, a fix for a
+vulnerability causes an error to show when running ceph -s details can
+be found here.
+
+It is highly recommended that all clients in the system are upgraded to
+a newer version of Ceph that correctly reclaims global_id values. Once
+all clients have been updated, you can stop allowing insecure
+reconnections with:
+
+    ceph config set mon auth_allow_insecure_global_id_reclaim false
+
+SoftIron Customer Portal
+
+Copyright © SoftIron Limited, 2021. All rights reserved.
